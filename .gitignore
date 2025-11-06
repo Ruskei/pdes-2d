@@ -1,0 +1,12 @@
+.zig-cache
+libs/zigimg
+zig-out/bin
+.DS_Store
+created_image.qoi
+forcing_image.qoi
+image.png
+solution.qoi
+tent_image.qoi
+triangle_mesh.qoi
+triangles.qoi
+cos_image.qoi
