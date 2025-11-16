@@ -298,59 +298,59 @@ fn evalSolution(
 }
 
 pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    std.debug.print("num_elements: {d}, forcing(1) => {d}\n", .{ num_elements, forcing(1.0) });
-
-    var nodes = [_]f32{0} ** (num_elements + 1);
-    populateNodes(&nodes);
-    const nodes_immutable = nodes[0..];
-
-    var k = Matrix.zero();
-    calculateStiffness(&k);
-    std.debug.print("k: {any}\n", .{k});
-
-    var b = [_]f32{0} ** (num_elements - 1);
-    calculateLoad(nodes[0..], &b);
-    std.debug.print("b: {any}\n", .{b});
-
-    const solution = try solveLinearSystem(allocator, &k.components, &b);
-    // const solution = try solveLinearSystem(allocator, &[_][]const f32{
-    //     k.components[0][0..],
-    //     k.components[1][0..],
-    //     k.components[2][0..],
-    // }, &b);
-    std.debug.print("solution: {any}\n", .{solution});
-
-    const computed_b = try k.mul(solution, allocator);
-    defer allocator.free(computed_b);
-
-    for (0..b.len) |i| {
-        std.debug.print("error: {d}\n", .{b[i] - computed_b[i]});
-    }
-
-    try imageTest(allocator);
-    try createImageCosTest(allocator);
-
-    // const forcing_graph = Graph{ .min_x = 0, .max_x = 1, .min_y = -2, .max_y = 2, .function = forcing };
+    // const allocator = std.heap.page_allocator;
+    // std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+    // std.debug.print("num_elements: {d}, forcing(1) => {d}\n", .{ num_elements, forcing(1.0) });
     //
-    // try forcing_graph.toImage(256, 256, "forcing_image.qoi", allocator);
-
-    const Tent = struct {
-        wts: []f32,
-        nds: []f32,
-
-        pub fn eval(self: *const anyopaque, x: f32) f32 {
-            const t: *const @This() = @ptrCast(@alignCast(self));
-            return evalSolution(t.wts, t.nds, x);
-        }
-    };
-
-    const t: *const anyopaque = &Tent{ .wts = solution, .nds = nodes_immutable };
-
-    const tent_graph = Graph{ .min_x = 0, .max_x = 1, .min_y = -2, .max_y = 2, .function = Tent.eval, .context = t };
-
-    try tent_graph.toImage(256, 256, "tent_image.qoi", allocator);
-
+    // var nodes = [_]f32{0} ** (num_elements + 1);
+    // populateNodes(&nodes);
+    // const nodes_immutable = nodes[0..];
+    //
+    // var k = Matrix.zero();
+    // calculateStiffness(&k);
+    // std.debug.print("k: {any}\n", .{k});
+    //
+    // var b = [_]f32{0} ** (num_elements - 1);
+    // calculateLoad(nodes[0..], &b);
+    // std.debug.print("b: {any}\n", .{b});
+    //
+    // const solution = try solveLinearSystem(allocator, &k.components, &b);
+    // // const solution = try solveLinearSystem(allocator, &[_][]const f32{
+    // //     k.components[0][0..],
+    // //     k.components[1][0..],
+    // //     k.components[2][0..],
+    // // }, &b);
+    // std.debug.print("solution: {any}\n", .{solution});
+    //
+    // const computed_b = try k.mul(solution, allocator);
+    // defer allocator.free(computed_b);
+    //
+    // for (0..b.len) |i| {
+    //     std.debug.print("error: {d}\n", .{b[i] - computed_b[i]});
+    // }
+    //
+    // try imageTest(allocator);
+    // try createImageCosTest(allocator);
+    //
+    // // const forcing_graph = Graph{ .min_x = 0, .max_x = 1, .min_y = -2, .max_y = 2, .function = forcing };
+    // //
+    // // try forcing_graph.toImage(256, 256, "forcing_image.qoi", allocator);
+    //
+    // const Tent = struct {
+    //     wts: []f32,
+    //     nds: []f32,
+    //
+    //     pub fn eval(self: *const anyopaque, x: f32) f32 {
+    //         const t: *const @This() = @ptrCast(@alignCast(self));
+    //         return evalSolution(t.wts, t.nds, x);
+    //     }
+    // };
+    //
+    // const t: *const anyopaque = &Tent{ .wts = solution, .nds = nodes_immutable };
+    //
+    // const tent_graph = Graph{ .min_x = 0, .max_x = 1, .min_y = -2, .max_y = 2, .function = Tent.eval, .context = t };
+    //
+    // try tent_graph.toImage(256, 256, "tent_image.qoi", allocator);
+    //
     try fem_2d.test_main();
 }

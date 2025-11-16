@@ -386,9 +386,9 @@ fn drawLine(data: []u8, width: usize, height: usize, x0_: isize, y0_: isize, x1_
     }
 }
 
-const width_nodes = 48;
-const height_nodes = 49;
-const node_separation = 5;
+const width_nodes = 64;
+const height_nodes = 65;
+const node_separation = 3;
 const num_nodes = width_nodes * height_nodes;
 
 fn constructNodes(allocator: std.mem.Allocator) ![]Vector(2) {
@@ -490,7 +490,7 @@ fn applyBoundryAtNode(comptime size: usize, stiffness: *SqMatrix(size), load: *V
 }
 
 fn evalForcing(x: f32, y: f32) f32 {
-    return std.math.sin(std.math.pi * x / 20.0) * y * 100;
+    return std.math.sin(std.math.pi * (x - std.math.log2(y) * 10) / 20.0) * 100;
 }
 
 /// gaussian quadrature
@@ -657,6 +657,7 @@ fn test_mesh() !void {
     const allocator = gpa.allocator();
 
     {
+        var timer = try std.time.Timer.start();
         const nodes = try constructNodes(allocator);
         defer {
             for (nodes) |node| {
@@ -716,25 +717,44 @@ fn test_mesh() !void {
             }
         }
 
+        const elements_generation_duration = timer.lap();
+
         var stiffness = try SqMatrix(num_nodes).init(allocator);
         defer stiffness.deinit();
 
         calculateStiffness(num_nodes, &triangles, nodes, &stiffness);
+
+        const stiffness_generation_duration = timer.lap();
 
         var load = try Vector(num_nodes).init(allocator);
         defer load.deinit();
 
         calculateLoad(num_nodes, &triangles, nodes, &load);
 
+        const load_generation_duration = timer.lap();
+
         applyBoundaryConditions(num_nodes, &stiffness, &load);
+
+        const boundary_condition_duration = timer.lap();
 
         const coefficients = try solveSystem(num_nodes, &stiffness, &load, allocator);
         defer coefficients.deinit();
+
+        const solve_duration = timer.lap();
 
         // std.debug.print("stiffness: \n{any}\n", .{stiffness});
         // std.debug.print("load: {any}\n", .{load});
         // std.debug.print("coefficients: {any}\n", .{coefficients});
 
         try rasterize(&triangles, nodes, coefficients, allocator);
+
+        const rasterization_duration = timer.lap();
+
+        std.debug.print("element_generation_duration: {d}\n", .{elements_generation_duration / 1000});
+        std.debug.print("stiffness_generation_duration: {d}\n", .{stiffness_generation_duration / 1000});
+        std.debug.print("load_generation_duration: {d}\n", .{load_generation_duration / 1000});
+        std.debug.print("boundary_condition_duration: {d}\n", .{boundary_condition_duration / 1000});
+        std.debug.print("solve_duration: {d}\n", .{solve_duration / 1000});
+        std.debug.print("rasterization_duration: {d}\n", .{rasterization_duration / 1000});
     }
 }
