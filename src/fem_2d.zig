@@ -20,26 +20,12 @@ fn SqMatrix(comptime d: usize) type {
             self.allocator.free(self.components);
         }
 
-        fn get(self: *const @This(), col: usize, row: usize) f32 {
-            return self.components[col * d + row];
+        fn get(self: *const @This(), row: usize, col: usize) f32 {
+            return self.components[row * d + col];
         }
 
-        fn set(self: *const @This(), col: usize, row: usize, value: f32) void {
-            self.components[col * d + row] = value;
-        }
-
-        fn mul(self: *const @This(), vec: *const Vector(d), allocator: std.mem.Allocator) !*Vector(d) {
-            const out = try Vector(d).init(allocator);
-            for (0..d) |i| {
-                var sum: f32 = 0.0;
-                for (0..d) |j| {
-                    sum += vec.get(j) * self.get(i, j);
-                }
-
-                out.set(i, sum);
-            }
-
-            return out;
+        fn set(self: *const @This(), row: usize, col: usize, value: f32) !void {
+            self.components[row * d + col] = value;
         }
 
         fn mulInto(self: *const @This(), vec: *const Vector(d), out: *Vector(d)) *Vector(d) {
@@ -55,6 +41,19 @@ fn SqMatrix(comptime d: usize) type {
             return out;
         }
 
+        fn checkSymmetric(self: *const @This()) void {
+            for (0..d) |row| {
+                for (row..d) |col| {
+                    const v1 = self.get(row, col);
+                    const v2 = self.get(col, row);
+                    if (@abs(v1 - v2) > 1e-11) {
+                        std.debug.print("symmetry mismatch! ({d}, {d}) => {d}, ({d}, {d}) => {d}\n", .{ row, col, v1, col, row, v2 });
+                        return;
+                    }
+                }
+            }
+        }
+
         pub fn format(value: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
             _ = fmt;
             _ = options;
@@ -67,6 +66,221 @@ fn SqMatrix(comptime d: usize) type {
                         try writer.writeAll(", ");
                     }
                 }
+                try writer.writeAll(" ]\n");
+            }
+        }
+    };
+}
+
+fn SSM(comptime d: usize) type {
+    return struct {
+        values: std.ArrayList(f32),
+        col_idx: std.ArrayList(usize),
+        row_ptr: []usize,
+        allocator: std.mem.Allocator,
+
+        fn init(allocator: std.mem.Allocator) !SSM(d) {
+            const row_ptr = try allocator.alloc(usize, d + 1);
+            @memset(row_ptr, 0);
+            return SSM(d){
+                .values = std.ArrayList(f32).init(allocator),
+                .col_idx = std.ArrayList(usize).init(allocator),
+                .row_ptr = row_ptr,
+                .allocator = allocator,
+            };
+        }
+
+        fn deinit(self: *const @This()) void {
+            self.values.deinit();
+            self.col_idx.deinit();
+            self.allocator.free(self.row_ptr);
+        }
+
+        fn get(self: *const @This(), _row: usize, _col: usize) f32 {
+            var col: usize = _col;
+            var row: usize = _row;
+            if (_row > _col) {
+                col = _row;
+                row = _col;
+            }
+
+            const row_start = self.row_ptr[row];
+            const row_end = self.row_ptr[row + 1];
+            for (row_start..row_end) |y| {
+                const x = self.col_idx.items[y];
+                if (x > col) return 0.0;
+                if (x == col) return self.values.items[y];
+            }
+
+            return 0.0;
+        }
+
+        fn set(self: *@This(), row: usize, col: usize, value: f32) !void {
+            if (row > col) return;
+
+            const row_start = self.row_ptr[row];
+            const row_end = self.row_ptr[row + 1];
+            if (row_start == row_end) {
+                // this row is empty
+                if (value == 0) return;
+                try self.values.insert(row_start, value);
+                try self.col_idx.insert(row_start, col);
+                for ((row + 1)..(d + 1)) |k| {
+                    self.row_ptr[k] += 1;
+                }
+
+                return;
+            }
+
+            for (row_start..row_end) |i| {
+                const x = self.col_idx.items[i];
+                if (x == col) {
+                    self.values.items[i] = value;
+                    return;
+                }
+
+                if (x > col) {
+                    if (value == 0) return;
+                    try self.values.insert(i, value);
+                    try self.col_idx.insert(i, col);
+                    for ((row + 1)..(d + 1)) |k| {
+                        self.row_ptr[k] += 1;
+                    }
+
+                    return;
+                }
+            }
+
+            if (value == 0) return;
+
+            //value to add must be at the end of the row
+            try self.values.insert(row_end, value);
+            try self.col_idx.insert(row_end, col);
+            for ((row + 1)..(d + 1)) |k| {
+                self.row_ptr[k] += 1;
+            }
+        }
+
+        fn add(self: *@This(), row: usize, col: usize, value: f32) !void {
+            if (row > col) return;
+            if (value == 0) return;
+
+            const row_start = self.row_ptr[row];
+            const row_end = self.row_ptr[row + 1];
+            if (row_start == row_end) {
+                // this row is empty
+                try self.values.insert(row_start, value);
+                try self.col_idx.insert(row_start, col);
+                for ((row + 1)..(d + 1)) |k| {
+                    self.row_ptr[k] += 1;
+                }
+
+                return;
+            }
+
+            for (row_start..row_end) |i| {
+                const x = self.col_idx.items[i];
+                if (x == col) {
+                    self.values.items[i] += value;
+                    return;
+                }
+
+                if (x > col) {
+                    try self.values.insert(i, value);
+                    try self.col_idx.insert(i, col);
+                    for ((row + 1)..(d + 1)) |k| {
+                        self.row_ptr[k] += 1;
+                    }
+
+                    return;
+                }
+            }
+
+            //value to add must be at the end of the row
+            try self.values.insert(row_end, value);
+            try self.col_idx.insert(row_end, col);
+            for ((row + 1)..(d + 1)) |k| {
+                self.row_ptr[k] += 1;
+            }
+        }
+
+        fn mulInto(self: *const @This(), vec: *const Vector(d), out: *Vector(d)) *Vector(d) {
+            @memset(out.elements, 0);
+
+            for (0..d) |row| {
+                const row_start = self.row_ptr[row];
+                const row_end = self.row_ptr[row + 1];
+                if (row_start == row_end) continue; // row is empty
+                var start_idx = row_start;
+                if (self.col_idx.items[row_start] == row) {
+                    out.set(row, out.get(row) + self.values.items[row_start] * vec.get(row)); //diagonal element
+                    start_idx += 1;
+                }
+
+                for (start_idx..row_end) |i| {
+                    const col = self.col_idx.items[i];
+                    out.set(row, out.get(row) + self.values.items[i] * vec.get(col));
+                    out.set(col, out.get(col) + self.values.items[i] * vec.get(row));
+                }
+            }
+
+            return out;
+        }
+
+        fn toRegular(self: *const @This(), out: *SqMatrix(d)) *SqMatrix(d) {
+            if (self.values.items.len == 0) return out;
+
+            for (0..d) |row| {
+                const row_start = self.row_ptr[row];
+                const row_end = self.row_ptr[row + 1];
+                for (row_start..row_end) |i| {
+                    const col = self.col_idx.items[i];
+                    const value = self.values.items[i];
+                    out.set(col, row, value);
+                    out.set(row, col, value);
+                }
+            }
+
+            return out;
+        }
+
+        fn checkSimilar(self: *const @This(), other: anytype) void {
+            if (self.values.items.len == 0) return;
+
+            for (0..d) |row| {
+                const row_start = self.row_ptr[row];
+                const row_end = self.row_ptr[row + 1];
+                for (row_start..row_end) |i| {
+                    const col = self.col_idx.items[i];
+                    const value = self.values.items[i];
+                    const otherValue = other.get(row, col);
+                    if (@abs(otherValue - value) > 1e-11) {
+                        std.debug.print("ssm mismatch at ({d}, {d}); self => {d}, other => {d}\n", .{ row, col, value, otherValue });
+                        return;
+                    }
+                }
+            }
+        }
+
+        pub fn format(value: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+            _ = fmt;
+            _ = options;
+
+            std.debug.print("values: {any}\n", .{value.values.items});
+            std.debug.print("col_idx: {any}\n", .{value.col_idx.items});
+            std.debug.print("row_ptr: {any}\n", .{value.row_ptr});
+
+            if (value.values.items.len == 0) return;
+
+            for (0..d) |row| {
+                try writer.writeAll("[ ");
+                const row_start = value.row_ptr[row];
+                const row_end = value.row_ptr[row + 1];
+                for (row_start..row_end) |i| {
+                    try writer.print("{e: >8.2}", .{value.values.items[i]});
+                    try writer.writeAll(", ");
+                }
+
                 try writer.writeAll(" ]\n");
             }
         }
@@ -173,6 +387,15 @@ fn Vector(comptime d: usize) type {
             return self;
         }
 
+        fn checkSimilar(self: *const @This(), other: *const @This()) void {
+            for (0..d) |i| {
+                if (@abs(self.get(i) - other.get(i)) > 1e-11) {
+                    std.debug.print("vec mismatch at {d} self: {d}, other: {d}\n", .{ i, self.get(i), other.get(i) });
+                    return;
+                }
+            }
+        }
+
         pub fn format(value: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
             _ = fmt;
             _ = options;
@@ -198,7 +421,7 @@ fn Vector(comptime d: usize) type {
 ///   adjust the residual based on the movement
 ///   if residual is small, we're done
 ///   update the search direction to be perpendicular to the previous (all) search directions
-fn solveSystem(comptime size: usize, A: *const SqMatrix(size), b: *const Vector(size), allocator: std.mem.Allocator) !Vector(size) {
+fn solveSystem(comptime size: usize, A: anytype, b: *const Vector(size), allocator: std.mem.Allocator) !Vector(size) {
     const epsilon: f32 = 1e-11;
     var residual: Vector(size) = try Vector(size).clone(b, allocator);
     defer residual.deinit();
@@ -289,53 +512,7 @@ const TriangleElement = struct {
 };
 
 pub fn test_main() !void {
-    const allocator = std.heap.page_allocator;
-
-    const m = try SqMatrix(3).init(allocator);
-    defer m.deinit();
-
-    m.set(1, 2, 69.0 / 17.0);
-
-    var v = try Vector(3).init(allocator);
-    defer v.deinit();
-
-    v.set(2, 23.4);
-
-    std.debug.print("m: \n{any}\n", .{m});
-    std.debug.print("v: \n{any}\n", .{v});
-
-    try test_mult();
     try test_mesh();
-}
-
-fn test_mult() !void {
-    const allocator = std.heap.page_allocator;
-
-    const m = try SqMatrix(3).init(allocator);
-    defer m.deinit();
-
-    m.set(0, 0, 4);
-    m.set(0, 1, -4);
-    m.set(0, 2, 0);
-
-    m.set(1, 0, -4);
-    m.set(1, 1, 4);
-    m.set(1, 2, -4);
-
-    m.set(2, 0, 0);
-    m.set(2, 1, -4);
-    m.set(2, 2, 4);
-
-    var v = try Vector(3).init(allocator);
-    defer v.deinit();
-
-    v.set(0, -4);
-    v.set(1, -8);
-    v.set(2, 4);
-
-    const x = try solveSystem(3, &m, &v, allocator);
-    defer x.deinit();
-    std.debug.print("x: \n{any}\n", .{x});
 }
 
 fn drawPixel(data: []u8, width: usize, height: usize, x: isize, y: isize, r: u8, g: u8, b: u8) void {
@@ -427,7 +604,7 @@ fn constructNodes(allocator: std.mem.Allocator) ![]Vector(2) {
 ///             matrix[i, j] = b_i . b_j / (4A)
 ///     end for
 ///   end for
-fn calculateStiffness(comptime size: usize, elements: []TriangleElement, nodes: []Vector(2), out: *SqMatrix(size)) void {
+fn calculateStiffness(comptime size: usize, elements: []TriangleElement, nodes: []Vector(2), out: *SSM(size)) !void {
     for (elements) |element| {
         const element_node_indices = [_]usize{ element.a, element.b, element.c };
         const element_nodes = [_]Vector(2){ nodes[element.a], nodes[element.b], nodes[element.c] };
@@ -452,41 +629,51 @@ fn calculateStiffness(comptime size: usize, elements: []TriangleElement, nodes: 
                 // std.debug.print("  db_i: {d}, {d}\n", .{ b_i_x / (2 * area), b_i_y / (2 * area) });
                 // std.debug.print("  db_j: {d}, {d}\n", .{ b_j_x / (2 * area), b_j_y / (2 * area) });
 
-                out.set(node_i_idx, node_j_idx, out.get(node_i_idx, node_j_idx) + (b_i_x * b_j_x + b_i_y * b_j_y) / (4 * area));
+                try out.add(node_i_idx, node_j_idx, (b_i_x * b_j_x + b_i_y * b_j_y) / (4 * area));
+                // try out.set(node_i_idx, node_j_idx, out.get(node_i_idx, node_j_idx) + (b_i_x * b_j_x + b_i_y * b_j_y) / (4 * area));
             }
         }
     }
 }
 
-fn applyBoundaryConditions(comptime size: usize, stiffness: *SqMatrix(size), load: *Vector(size)) void {
+fn applyBC(comptime size: usize, stiffness: anytype, load: *Vector(size)) !void {
     //the corners of these setters overlap but it doesn't really matter
     for (0..width_nodes) |x| {
         // top row
-        applyBoundryAtNode(size, stiffness, load, x, 0);
+        try applyBCAtNode(size, stiffness, load, x, 0);
         // bottom row
-        applyBoundryAtNode(size, stiffness, load, (height_nodes - 1) * width_nodes + x, 0);
+        try applyBCAtNode(size, stiffness, load, (height_nodes - 1) * width_nodes + x, 0);
     }
 
     for (0..height_nodes) |y| {
         const yf: f32 = @floatFromInt(y);
         // left column
-        applyBoundryAtNode(size, stiffness, load, y * width_nodes, 0);
+        try applyBCAtNode(size, stiffness, load, y * width_nodes, 0);
         // right column
-        applyBoundryAtNode(size, stiffness, load, y * width_nodes + width_nodes - 1, std.math.sin(yf / 3) * 5000);
+        try applyBCAtNode(size, stiffness, load, y * width_nodes + width_nodes - 1, std.math.sin(yf / 3) * 5000);
     }
 }
 
-fn applyBoundryAtNode(comptime size: usize, stiffness: *SqMatrix(size), load: *Vector(size), idx: usize, value: f32) void {
+fn applyBCAtNode(comptime size: usize, stiffness: *SSM(size), load: *Vector(size), idx: usize, value: f32) !void {
     load.set(idx, value);
-    for (0..size) |y| {
-        stiffness.set(idx, y, 0);
+    // set i'th row and i'th column to 0
+    // for (0..idx) |row| {
+    //     try stiffness.set(idx, row, 0);
+    // }
+    //
+    // for (idx..size) |col| {
+    //     try stiffness.set(col, idx, 0);
+    // }
+
+    for (idx..size) |y| {
+        try stiffness.set(idx, y, 0);
     }
 
-    for (0..size) |x| {
-        stiffness.set(x, idx, 0);
+    for (0..idx) |x| {
+        try stiffness.set(x, idx, 0);
     }
 
-    stiffness.set(idx, idx, 1);
+    try stiffness.set(idx, idx, 1);
 }
 
 fn evalForcing(x: f32, y: f32) f32 {
@@ -719,10 +906,10 @@ fn test_mesh() !void {
 
         const elements_generation_duration = timer.lap();
 
-        var stiffness = try SqMatrix(num_nodes).init(allocator);
+        var stiffness = try SSM(num_nodes).init(allocator);
         defer stiffness.deinit();
 
-        calculateStiffness(num_nodes, &triangles, nodes, &stiffness);
+        try calculateStiffness(num_nodes, &triangles, nodes, &stiffness);
 
         const stiffness_generation_duration = timer.lap();
 
@@ -733,7 +920,7 @@ fn test_mesh() !void {
 
         const load_generation_duration = timer.lap();
 
-        applyBoundaryConditions(num_nodes, &stiffness, &load);
+        try applyBC(num_nodes, &stiffness, &load);
 
         const boundary_condition_duration = timer.lap();
 
@@ -756,5 +943,58 @@ fn test_mesh() !void {
         std.debug.print("boundary_condition_duration: {d}\n", .{boundary_condition_duration / 1000});
         std.debug.print("solve_duration: {d}\n", .{solve_duration / 1000});
         std.debug.print("rasterization_duration: {d}\n", .{rasterization_duration / 1000});
+
+        var coefficients_checksum: f32 = 0;
+        for (coefficients.elements) |elem| {
+            coefficients_checksum += elem;
+        }
+
+        std.debug.print("checksum: {d}\n", .{coefficients_checksum});
+
+        // {
+        //     var stiffness_regular = try SqMatrix(num_nodes).init(allocator);
+        //     defer stiffness_regular.deinit();
+        //     _ = stiffness.toRegular(&stiffness_regular);
+        //
+        //     stiffness_regular.checkSymmetric();
+        //
+        //     var stiffness_regular_out = try Vector(num_nodes).init(allocator);
+        //     defer stiffness_regular_out.deinit();
+        //     _ = stiffness_regular.mulInto(&load, &stiffness_regular_out);
+        //
+        //     var stiffness_sparse_out = try Vector(num_nodes).init(allocator);
+        //     defer stiffness_sparse_out.deinit();
+        //     _ = stiffness.mulInto(&load, &stiffness_sparse_out);
+        //
+        //     stiffness_regular_out.checkSimilar(&stiffness_sparse_out);
+        // }
+
+        // stiffness_regular.mulInto(vec: *const Vector(), out: *Vector())
+
+        // var ssm = try SSM(3).init(allocator);
+        // defer ssm.deinit();
+        //
+        // try ssm.set(0, 0, 1);
+        // try ssm.set(1, 1, 1);
+        // try ssm.set(2, 2, 1);
+        //
+        // try ssm.set(1, 0, 2);
+        // try ssm.set(2, 1, 3);
+        //
+        // var ssm_vec = try Vector(3).init(allocator);
+        // defer ssm_vec.deinit();
+        //
+        // ssm_vec.set(0, 1);
+        // ssm_vec.set(1, 2);
+        // ssm_vec.set(2, 3);
+        //
+        // var ssm_out = try Vector(3).init(allocator);
+        // defer ssm_out.deinit();
+        //
+        // _ = ssm.mulInto(&ssm_vec, &ssm_out);
+        //
+        // std.debug.print("ssm: \n{any}\n", .{ssm});
+        // std.debug.print("ssm_vec: {any}\n", .{ssm_vec});
+        // std.debug.print("ssm_out: {any}\n", .{ssm_out});
     }
 }
